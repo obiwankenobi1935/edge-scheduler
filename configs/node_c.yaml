@@ -1,0 +1,17 @@
+node_id: c
+host: 127.0.0.1
+port: 8003
+peers:
+  - node_id: a
+    host: 127.0.0.1
+    port: 8001
+  - node_id: b
+    host: 127.0.0.1
+    port: 8002
+scoring:
+  queue_weight:     10.0
+  network_weight:    1.0
+  cpu_weight:        0.5
+  energy_weight:     0.3
+  variance_penalty:  2.0
+  jitter_threshold:  5.0
