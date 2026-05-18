@@ -39,6 +39,7 @@ def create_app(
     node_id: str,
     stats: SchedulerStats | None = None,         # M5
     decision_log: DecisionLog | None = None,     # M5
+    self_priority: int = 5,                      # M6
 ) -> FastAPI:
     app = FastAPI(title=f"edge-scheduler node {node_id}")
 
@@ -52,6 +53,7 @@ def create_app(
             body.from_node_id,
             queue_depth=body.queue_depth,
             metrics=body.metrics,
+            priority=body.priority,            # M6
         )
         # M4: adopt gossiped config if it is newer than ours.
         if body.scoring_config is not None:
@@ -103,6 +105,7 @@ def create_app(
             config_store=config_store,
             stats=stats,                    # M5
             decision_log=decision_log,      # M5
+            self_priority=self_priority,    # M6
         )
 
         if not forwarded:

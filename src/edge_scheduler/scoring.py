@@ -66,27 +66,34 @@ POLICY_PRESETS: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 
 class ScoringConfig(BaseModel):
-    policy:           Policy  = "balanced"
-    queue_weight:     float   = 10.0
-    network_weight:   float   =  1.0
-    cpu_weight:       float   =  0.5
-    energy_weight:    float   =  0.3
-    variance_penalty: float   =  2.0
-    jitter_threshold: float   =  5.0
+    policy:               Policy  = "balanced"
+    queue_weight:         float   = 10.0
+    network_weight:       float   =  1.0
+    cpu_weight:           float   =  0.5
+    energy_weight:        float   =  0.3
+    variance_penalty:     float   =  2.0
+    jitter_threshold:     float   =  5.0
+    # M6: adaptive scheduling weights
+    battery_weight:       float   =  3.0   # cost per % battery drained (only on battery)
+    priority_weight:      float   =  2.0   # cost reduction per priority point (1–10)
+    congestion_multiplier: float  =  3.0   # network_quality multiplier on spike detection
     updated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
 
     def to_dict(self) -> dict:
         return {
-            "policy":           self.policy,
-            "queue_weight":     self.queue_weight,
-            "network_weight":   self.network_weight,
-            "cpu_weight":       self.cpu_weight,
-            "energy_weight":    self.energy_weight,
-            "variance_penalty": self.variance_penalty,
-            "jitter_threshold": self.jitter_threshold,
-            "updated_at":       self.updated_at.isoformat(),
+            "policy":               self.policy,
+            "queue_weight":         self.queue_weight,
+            "network_weight":       self.network_weight,
+            "cpu_weight":           self.cpu_weight,
+            "energy_weight":        self.energy_weight,
+            "variance_penalty":     self.variance_penalty,
+            "jitter_threshold":     self.jitter_threshold,
+            "battery_weight":       self.battery_weight,
+            "priority_weight":      self.priority_weight,
+            "congestion_multiplier": self.congestion_multiplier,
+            "updated_at":           self.updated_at.isoformat(),
         }
 
 
@@ -124,11 +131,31 @@ class RTTWindow:
     def quality_score(self, variance_penalty: float) -> float:
         return self.mean() + (self.stddev() * variance_penalty)
 
+    @property
+    def is_congested(self) -> bool:
+        """True when the latest RTT sample is more than 2× the rolling mean.
+
+        Requires at least 3 samples so a single outlier at startup doesn't
+        trigger a false positive.
+        """
+        if len(self._samples) < 3:
+            return False
+        mean = self.mean()
+        if mean == 0.0:
+            return False
+        return self._samples[-1] > mean * 2.0
+
+    def congestion_score(self, variance_penalty: float, congestion_multiplier: float) -> float:
+        """quality_score amplified when a sudden RTT spike is detected."""
+        base = self.quality_score(variance_penalty)
+        return base * congestion_multiplier if self.is_congested else base
+
     def snapshot(self) -> dict:
         return {
             "mean_ms":   round(self.mean(), 3),
             "stddev_ms": round(self.stddev(), 3),
             "samples":   len(self._samples),
+            "congested": self.is_congested,
         }
 
 
@@ -142,13 +169,31 @@ def cost(
     cpu_percent:     float = 0.0,
     energy_proxy:    float = 0.0,
     config:          ScoringConfig | None = None,
+    # M6: adaptive signals
+    power_source:    str         = "ac",
+    battery_percent: float | None = None,
+    priority:        int         = 5,
 ) -> float:
     cfg = config or ScoringConfig()
+
+    # Battery penalty: only charged when running on battery and level is known.
+    # A node at 10% battery gets a much higher penalty than one at 80%.
+    battery_cost = 0.0
+    if power_source == "battery" and battery_percent is not None:
+        battery_cost = (100.0 - battery_percent) * cfg.battery_weight
+
+    # Priority offset: centred at 5 (default) so mid-range nodes are unaffected.
+    # priority > 5 → negative offset (lower cost, scheduler prefers it).
+    # priority < 5 → positive offset (higher cost, scheduler avoids it).
+    priority_offset = (priority - 5) * cfg.priority_weight
+
     return (
           (queue_depth     * cfg.queue_weight)
         + (network_quality * cfg.network_weight)
         + (cpu_percent     * cfg.cpu_weight)
         + (energy_proxy    * cfg.energy_weight)
+        + battery_cost
+        - priority_offset
     )
 
 

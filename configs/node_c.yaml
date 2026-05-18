@@ -1,12 +1,12 @@
 node_id: c
-host: 127.0.0.1
+host: 0.0.0.0
 port: 8003
 peers:
   - node_id: a
     host: 127.0.0.1
     port: 8001
   - node_id: b
-    host: 127.0.0.1
+    host: 192.168.1.78
     port: 8002
 scoring:
   queue_weight:     10.0

@@ -34,6 +34,15 @@ def _sample_now(node_id: str) -> NodeMetrics:
     mem_avail_mb = vm.available / (1024 * 1024)
     energy = cpu * mem_pct / 100.0            # synthetic proxy
 
+    # M6: battery awareness — psutil returns None on desktops/Pis with no battery
+    battery         = psutil.sensors_battery()
+    if battery is not None:
+        power_source    = "ac" if battery.power_plugged else "battery"
+        battery_percent = round(battery.percent, 1)
+    else:
+        power_source    = "ac"    # no battery info → assume mains power
+        battery_percent = None
+
     return NodeMetrics(
         node_id=node_id,
         cpu_percent=round(cpu, 2),
@@ -41,6 +50,8 @@ def _sample_now(node_id: str) -> NodeMetrics:
         memory_available_mb=round(mem_avail_mb, 1),
         energy_proxy=round(energy, 2),
         sampled_at=datetime.now(timezone.utc),
+        power_source=power_source,
+        battery_percent=battery_percent,
     )
 
 

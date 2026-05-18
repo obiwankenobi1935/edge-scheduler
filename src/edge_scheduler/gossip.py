@@ -44,6 +44,7 @@ async def gossip_loop(
     jobs: JobStore,
     sampler: MetricsSampler,
     config_store: ConfigStore,      # M4: broadcast active weights
+    self_priority: int = 5,         # M6: broadcast this node's priority
 ) -> None:
     """Run forever, gossiping to all peers every GOSSIP_INTERVAL_S seconds."""
     async with httpx.AsyncClient() as client:
@@ -55,6 +56,7 @@ async def gossip_loop(
                 "queue_depth": jobs.queue_depth,
                 "metrics": sampler.latest.model_dump(mode="json"),
                 "scoring_config": config_store.current.model_dump(mode="json"),  # M4
+                "priority": self_priority,                                        # M6
             }
             tasks = [
                 _gossip_one(

@@ -23,6 +23,7 @@ class NodeConfig(BaseModel):
     port: int
     peers: list[PeerEntry]
     scoring: ScoringConfig = ScoringConfig()   # M4: optional, defaults apply if absent
+    priority: int = 5                          # M6: 1 (lowest) – 10 (highest); default mid-range
 
 
 def load_config(path: str | Path) -> NodeConfig:

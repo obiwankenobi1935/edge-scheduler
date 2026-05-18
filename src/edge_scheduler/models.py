@@ -21,6 +21,9 @@ class NodeMetrics(BaseModel):
     memory_available_mb: float
     energy_proxy: float           # cpu * memory / 100 on laptop; real watts on Pi
     sampled_at: datetime
+    # M6: battery awareness — "ac" | "battery" | "unknown"
+    power_source: str = "unknown"
+    battery_percent: float | None = None   # None when no battery present (desktop/Pi on mains)
 
     def to_dict(self) -> dict:
         return {
@@ -30,6 +33,8 @@ class NodeMetrics(BaseModel):
             "memory_available_mb": self.memory_available_mb,
             "energy_proxy": self.energy_proxy,
             "sampled_at": self.sampled_at.isoformat(),
+            "power_source": self.power_source,
+            "battery_percent": self.battery_percent,
         }
 
 
@@ -43,6 +48,7 @@ class PeerUpdate(BaseModel):
     queue_depth: int = 0                          # M2: sender broadcasts current load
     metrics: NodeMetrics | None = None            # M3: sender broadcasts resource state
     scoring_config: ScoringConfig | None = None   # M4: sender broadcasts active weights
+    priority: int = 5                             # M6: sender's configured priority (1–10)
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +82,7 @@ class PeerRecord(BaseModel):
     rtt_ms: float | None = None
     queue_depth: int = 0                  # M2: last known queue depth from gossip
     metrics: NodeMetrics | None = None    # M3: last known resource state from gossip
+    priority: int = 5                     # M6: peer's configured priority (1–10)
 
     def status(self, now: datetime | None = None) -> Literal["alive", "stale", "dead"]:
         return peer_status(self.last_seen, now)
@@ -91,6 +98,7 @@ class PeerRecord(BaseModel):
             "queue_depth": self.queue_depth,
             "metrics": self.metrics.to_dict() if self.metrics else None,
             "status": self.status(now),
+            "priority": self.priority,
         }
 
 

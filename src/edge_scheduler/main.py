@@ -33,6 +33,7 @@ async def run(config_path: str) -> None:
     app          = create_app(
         table, jobs, sampler, config_store, config.node_id,
         stats=stats, decision_log=decision_log,  # M5
+        self_priority=config.priority,           # M6
     )
 
     uvi_config = uvicorn.Config(
@@ -41,7 +42,8 @@ async def run(config_path: str) -> None:
     server = uvicorn.Server(uvi_config)
 
     gossip_task  = asyncio.create_task(
-        gossip_loop(table, config.node_id, jobs, sampler, config_store)
+        gossip_loop(table, config.node_id, jobs, sampler, config_store,
+                    self_priority=config.priority)   # M6
     )
     metrics_task = asyncio.create_task(sampler.run())
 

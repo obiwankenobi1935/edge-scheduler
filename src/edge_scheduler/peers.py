@@ -49,6 +49,7 @@ class PeerTable:
         rtt_ms: float | None = None,
         queue_depth: int | None = None,
         metrics: NodeMetrics | None = None,
+        priority: int | None = None,           # M6: peer's configured priority
     ) -> None:
         """Mark a peer as freshly seen."""
         peer = self._peers.get(node_id)
@@ -66,6 +67,8 @@ class PeerTable:
             peer.queue_depth = queue_depth
         if metrics is not None:
             peer.metrics = metrics
+        if priority is not None:
+            peer.priority = priority             # M6: update priority from gossip
         new_status = peer.status()
         if old_status != new_status:
             log.info("peer_status_change", peer=node_id, old=old_status, new=new_status)
