@@ -1,4 +1,4 @@
-"""M6 tests: battery awareness, node priority, and congestion detection."""
+"""M6 tests: battery awareness, node priority, congestion detection, and adaptive controller."""
 
 from __future__ import annotations
 
@@ -6,6 +6,13 @@ from datetime import datetime, timezone
 
 import pytest
 
+from edge_scheduler.adaptive import (
+    BATTERY_CRITICAL,
+    BATTERY_LOW,
+    CPU_HIGH,
+    HYSTERESIS_COUNT,
+    AdaptiveController,
+)
 from edge_scheduler.models import NodeMetrics, PeerRecord
 from edge_scheduler.scheduler import pick_node
 from edge_scheduler.scoring import ConfigStore, RTTWindow, ScoringConfig, cost
@@ -248,7 +255,6 @@ class TestCongestionDetection:
 class TestCongestionPickNode:
     def test_congested_peer_avoided(self):
         """A peer with a congested RTT window loses to a stable self."""
-        # Build a window with a spike
         window = RTTWindow()
         for _ in range(5):
             window.add(5.0)
@@ -257,6 +263,119 @@ class TestCongestionPickNode:
 
         peer = _alive_peer("b", queue_depth=0, rtt_ms=5.0)
         table = _mock_table([peer], rtt_window=window)
-        # Self queue=0, peer has congested network → peer cost much higher
         node, _ = pick_node("a", 0, _make_metrics(), table, _default_store())
         assert node == "a"
+
+
+# ---------------------------------------------------------------------------
+# AdaptiveController
+# ---------------------------------------------------------------------------
+
+def _make_controller(
+    sampler_metrics: NodeMetrics,
+    peers: list[PeerRecord] | None = None,
+    rtt_window: RTTWindow | None = None,
+) -> AdaptiveController:
+    """Build a controller with injected metrics and peers."""
+    store   = ConfigStore()
+    sampler = MagicMock()
+    sampler.latest = sampler_metrics
+    table   = _mock_table(peers or [], rtt_window=rtt_window)
+    return AdaptiveController(store, sampler, table, "a")
+
+
+class TestAdaptiveControllerDetect:
+    def test_balanced_by_default(self):
+        ctrl = _make_controller(_make_metrics(cpu=20.0, power_source="ac"))
+        assert ctrl._detect_target() == "balanced"
+
+    def test_local_first_on_critical_battery(self):
+        m = _make_metrics(power_source="battery", battery_percent=5.0)
+        ctrl = _make_controller(m)
+        assert ctrl._detect_target() == "local_first"
+
+    def test_local_first_when_no_alive_peers(self):
+        from datetime import timedelta
+        dead = PeerRecord(
+            node_id="b", host="127.0.0.1", port=9000,
+            last_seen=datetime.now(timezone.utc) - timedelta(seconds=60),
+        )
+        m = _make_metrics(power_source="ac")
+        ctrl = _make_controller(m, peers=[dead])
+        assert ctrl._detect_target() == "local_first"
+
+    def test_local_first_when_all_peers_congested(self):
+        window = RTTWindow()
+        for _ in range(5):
+            window.add(5.0)
+        window.add(50.0)   # congested
+        peer = _alive_peer("b")
+        ctrl = _make_controller(_make_metrics(), peers=[peer], rtt_window=window)
+        assert ctrl._detect_target() == "local_first"
+
+    def test_energy_first_on_low_battery(self):
+        m = _make_metrics(power_source="battery", battery_percent=20.0)
+        ctrl = _make_controller(m)
+        assert ctrl._detect_target() == "energy_first"
+
+    def test_latency_first_on_high_cpu(self):
+        m = _make_metrics(cpu=90.0, power_source="ac")
+        ctrl = _make_controller(m)
+        assert ctrl._detect_target() == "latency_first"
+
+    def test_battery_critical_beats_high_cpu(self):
+        """Critical battery takes priority over high CPU."""
+        m = _make_metrics(cpu=90.0, power_source="battery", battery_percent=5.0)
+        ctrl = _make_controller(m)
+        assert ctrl._detect_target() == "local_first"
+
+    def test_ac_node_not_affected_by_battery_thresholds(self):
+        """AC node with battery_percent set is still treated as AC."""
+        m = _make_metrics(power_source="ac", battery_percent=5.0)
+        ctrl = _make_controller(m)
+        assert ctrl._detect_target() == "balanced"
+
+
+class TestAdaptiveControllerHysteresis:
+    def test_no_switch_on_first_detection(self):
+        """Single detection should not trigger a switch (hysteresis)."""
+        m = _make_metrics(cpu=90.0, power_source="ac")
+        ctrl = _make_controller(m)
+        result = ctrl.step()
+        assert result is None
+        assert ctrl.config_store.current.policy == "balanced"
+
+    def test_switch_after_hysteresis_count(self):
+        """Switch happens after HYSTERESIS_COUNT consecutive detections."""
+        m = _make_metrics(cpu=90.0, power_source="ac")
+        ctrl = _make_controller(m)
+        result = None
+        for _ in range(HYSTERESIS_COUNT):
+            result = ctrl.step()
+        assert result == "latency_first"
+        assert ctrl.config_store.current.policy == "latency_first"
+
+    def test_resets_on_condition_change(self):
+        """Changing conditions before hysteresis is met resets the counter."""
+        m_high_cpu = _make_metrics(cpu=90.0, power_source="ac")
+        ctrl = _make_controller(m_high_cpu)
+        ctrl.step()   # count=1 for latency_first
+
+        # Now conditions change back to normal
+        ctrl.sampler.latest = _make_metrics(cpu=10.0, power_source="ac")
+        ctrl.step()   # candidate resets to "balanced", count=1
+
+        # One more high-CPU reading — should not switch yet (count restarted)
+        ctrl.sampler.latest = m_high_cpu
+        result = ctrl.step()
+        assert result is None   # only 1 tick for latency_first since reset
+
+    def test_no_redundant_switch(self):
+        """Already on the right policy → no switch even after threshold."""
+        m = _make_metrics(cpu=90.0, power_source="ac")
+        ctrl = _make_controller(m)
+        ctrl.config_store.set_policy("latency_first")   # already set
+
+        for _ in range(HYSTERESIS_COUNT + 2):
+            result = ctrl.step()
+        assert result is None   # policy already matches, no redundant switch

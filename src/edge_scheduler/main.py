@@ -14,6 +14,7 @@ from edge_scheduler.gossip import gossip_loop
 from edge_scheduler.jobs import JobStore
 from edge_scheduler.metrics import MetricsSampler
 from edge_scheduler.peers import PeerTable
+from edge_scheduler.adaptive import AdaptiveController
 from edge_scheduler.scoring import ConfigStore
 from edge_scheduler.stats import DecisionLog, SchedulerStats
 
@@ -30,27 +31,29 @@ async def run(config_path: str) -> None:
     config_store = ConfigStore(config.scoring)   # M4: seed from YAML
     stats        = SchedulerStats()              # M5
     decision_log = DecisionLog()                 # M5
+    adaptive     = AdaptiveController(config_store, sampler, table, config.node_id)  # M6
     app          = create_app(
         table, jobs, sampler, config_store, config.node_id,
         stats=stats, decision_log=decision_log,  # M5
         self_priority=config.priority,           # M6
+        adaptive=adaptive,                       # M6
     )
 
     uvi_config = uvicorn.Config(
         app, host=config.host, port=config.port, log_level="info"
     )
     server = uvicorn.Server(uvi_config)
-
     gossip_task  = asyncio.create_task(
         gossip_loop(table, config.node_id, jobs, sampler, config_store,
                     self_priority=config.priority)   # M6
     )
-    metrics_task = asyncio.create_task(sampler.run())
+    metrics_task  = asyncio.create_task(sampler.run())
+    adaptive_task = asyncio.create_task(adaptive.run())
 
     try:
         await server.serve()
     finally:
-        for task in (gossip_task, metrics_task):
+        for task in (gossip_task, metrics_task, adaptive_task):
             task.cancel()
             try:
                 await task
